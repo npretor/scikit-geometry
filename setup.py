@@ -3,6 +3,38 @@ from setuptools.command.build_ext import build_ext
 import sys, os, glob, re
 import setuptools
 
+here = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_local_build_config():
+    """Read the optional [tool.skgeom] table from pyproject.toml.
+
+    Provides default CGAL/Boost locations so `pip install .` works without
+    manually exporting CGAL_INCLUDE_DIR / BOOST_ROOT. Returns {} if the table,
+    the file, or a TOML parser is unavailable.
+    """
+    try:
+        import tomllib  # Python 3.11+
+    except ImportError:
+        try:
+            import tomli as tomllib  # backport for older Pythons
+        except ImportError:
+            return {}
+    try:
+        with open(os.path.join(here, 'pyproject.toml'), 'rb') as f:
+            return tomllib.load(f).get('tool', {}).get('skgeom', {})
+    except (OSError, ValueError):
+        return {}
+
+
+_local_cfg = _load_local_build_config()
+
+
+def _resolve_path(env_var, cfg_key):
+    """Environment variable wins; otherwise fall back to pyproject config."""
+    value = os.getenv(env_var) or _local_cfg.get(cfg_key)
+    return os.path.expanduser(value) if value else None
+
 
 class get_pybind_include(object):
     """Helper class to determine the pybind11 include path
@@ -29,11 +61,20 @@ library_dirs = []
 cgal_libs = ["CGAL", "CGAL_Core"]
 boost_mt = False
 
+# Allow explicitly pointing at a CGAL include tree (e.g. a header-only 5.x
+# release) to override whatever is found on the system. Prepended so its
+# headers win over any other CGAL install on the include path. Comes from the
+# CGAL_INCLUDE_DIR env var or the [tool.skgeom] table in pyproject.toml.
+cgal_include_override = _resolve_path('CGAL_INCLUDE_DIR', 'cgal-include-dir')
+
 conda_prefix = os.getenv('CONDA_PREFIX')
 if not conda_prefix:
     conda_prefix = os.getenv('MINICONDAPATH')
 
-if conda_prefix:
+if cgal_include_override:
+    include_dirs.insert(0, cgal_include_override)
+    cgal_include = os.path.join(cgal_include_override, 'CGAL')
+elif conda_prefix:
     cgal_include = os.path.join(conda_prefix, 'include', 'CGAL')
 
     if not os.path.exists(cgal_include):
@@ -108,6 +149,18 @@ if sys.platform == 'darwin':
     include_dirs += ['/usr/local/include', '/opt/homebrew/include']
     library_dirs += ['/usr/local/lib', '/opt/homebrew/lib']
 
+# Allow pointing at a specific Boost install (e.g. a keg-only Homebrew
+# boost@1.85 that is contemporary with CGAL 5.x). Prepended so its headers
+# and libraries win over any newer system Boost on the path. Comes from the
+# BOOST_ROOT env var or the [tool.skgeom] table in pyproject.toml.
+boost_root = _resolve_path('BOOST_ROOT', 'boost-root')
+if boost_root:
+    include_dirs.insert(0, os.path.join(boost_root, 'include'))
+    library_dirs.insert(0, os.path.join(boost_root, 'lib'))
+    # Some Boost builds (incl. Homebrew's) ship thread/atomic only with the
+    # multi-threaded "-mt" suffix, so detect it from this specific tree.
+    boost_mt = bool(glob.glob(os.path.join(boost_root, 'lib', 'libboost*-mt*')))
+
 ext_modules = [
     Extension(
         'skgeom._skgeom',
@@ -134,10 +187,11 @@ ext_modules = [
         include_dirs=include_dirs,
         library_dirs=library_dirs,
         libraries=cgal_libs + ['mpfr',
-                   'gmp', 
+                   'gmp',
                    'boost_thread-mt' if boost_mt else 'boost_thread',
                    'boost_atomic-mt' if boost_mt else 'boost_atomic',
-                   'boost_system',
+                   # boost_system is header-only in modern Boost (>=1.69) and
+                   # ships no library to link against, so it is omitted here.
                    'boost_date_time',
                    'boost_chrono'],
         language='c++'
@@ -215,26 +269,16 @@ class BuildExt(build_ext):
 
         build_ext.build_extensions(self)
 
-here = os.path.dirname(os.path.abspath(__file__))
 version_ns = {}
 with open(os.path.join(here, 'skgeom', '_version.py')) as f:
     exec(f.read(), {}, version_ns)
 
+# Static metadata (name, dependencies, packages, …) lives in pyproject.toml.
+# setup.py only provides what must be computed at build time: the C++ extension
+# modules and the version read from skgeom/_version.py.
 setup(
-    name='skgeom',
     version=version_ns['__version__'],
-    author='Wolf Vollprecht',
-    author_email='w.vollprecht@gmail.com',
-    url='https://github.com/wolfv/scikit-geometry',
-    description='scikit-geometry, the python computational geometry library',
-    long_description='',
     ext_modules=ext_modules,
-    install_requires=['pybind11>=2.3,<2.8', 'numpy'],
-    setup_requires=['pybind11>=2.3,<2.8'],
-    extras_require={
-        "drawing": ["matplotlib"],
-    },
     cmdclass={'build_ext': BuildExt},
     zip_safe=False,
-    packages=['skgeom'],
 )

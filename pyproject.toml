@@ -1,0 +1,44 @@
+[build-system]
+# Declaring the build backend and its requirements lets `pip`/`uv` build in an
+# isolated environment automatically — no more `--no-build-isolation`. pybind11
+# is pinned to 2.x because 3.x forbids keep_alive on the def_property family,
+# which the C++ bindings rely on.
+requires = [
+    "setuptools>=61",
+    "wheel",
+    "pybind11>=2.10,<3",
+    "tomli; python_version < '3.11'",  # setup.py reads [tool.skgeom]; tomllib is 3.11+
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skgeom"
+description = "scikit-geometry, the python computational geometry library"
+authors = [{ name = "Wolf Vollprecht", email = "w.vollprecht@gmail.com" }]
+readme = "README.md"
+license = { text = "LGPL-3.0" }
+requires-python = ">=3.9"
+dependencies = ["pybind11>=2.10,<3", "numpy"]
+# Version is computed from skgeom/_version.py by setup.py.
+dynamic = ["version"]
+
+[project.optional-dependencies]
+drawing = ["matplotlib"]
+
+[project.urls]
+Homepage = "https://github.com/scikit-geometry/scikit-geometry"
+Documentation = "https://scikit-geometry.github.io/scikit-geometry"
+
+[tool.setuptools]
+packages = ["skgeom"]
+
+# ---------------------------------------------------------------------------
+# Local build configuration for compiling against a pinned CGAL 5.x + Boost
+# toolchain (see install-macos-source.sh for the rationale). setup.py reads
+# these as defaults; the CGAL_INCLUDE_DIR and BOOST_ROOT environment variables
+# override them. Edit these paths for your machine, or delete this table to
+# fall back to the system/conda CGAL and Boost.
+# ---------------------------------------------------------------------------
+[tool.skgeom]
+cgal-include-dir = "~/.local/opt/CGAL-5.6.3/include"
+boost-root = "/opt/homebrew/opt/boost@1.85"
